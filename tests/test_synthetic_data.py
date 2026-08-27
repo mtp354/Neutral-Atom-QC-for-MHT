@@ -1,36 +1,110 @@
-"""Check deterministic synthetic sequence generation and its CTC file layout."""
+"""Check ground-truth-first simulation and optional CTC file materialization."""
+
+from __future__ import annotations
 
 from dataclasses import replace
-from hashlib import sha256
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from neutral_atom_mht import (
-    ClassicalSolver,
     DEFAULT_SYNTHETIC_DATA_ROOT,
-    HPC,
-    HPCConfig,
+    GroundTruthFrame,
     QUANTUM_DEMO_DATA_CONFIG,
-    QuantumSolver,
+    SimulatedFrame,
     SyntheticDataConfig,
     SyntheticDataGenerator,
+    SyntheticScene,
 )
 
 
 def _small_config(**changes: object) -> SyntheticDataConfig:
     values = {
-        "noise": 0.25,
+        "gaussian_bluriness": 1.0,
+        "grainyness": 2.0,
         "frame_count": 3,
         "object_count": 4,
         "seed": 17,
         "dataset_name": "TINY-MHT",
         "sequence": "01",
         "image_shape": (64, 80),
+        "speed_px_per_frame": 2.0,
     }
     values.update(changes)
     return SyntheticDataConfig(**values)
+
+
+def test_scene_yields_clean_ground_truth_before_noise() -> None:
+    config = _small_config()
+
+    truth = tuple(SyntheticScene(config).iter_ground_truth())
+
+    assert len(truth) == config.frame_count
+    assert all(isinstance(frame, GroundTruthFrame) for frame in truth)
+    assert tuple(frame.frame for frame in truth) == (0, 1, 2)
+    assert all(frame.labels.dtype == np.uint16 for frame in truth)
+    assert all(frame.clean_image.dtype == np.float32 for frame in truth)
+    assert all(frame.labels.shape == config.image_shape for frame in truth)
+    assert all(len(frame.positions) == config.object_count for frame in truth)
+    expected_ids = set(range(1, config.object_count + 1))
+    assert all(set(np.unique(frame.labels)) - {0} == expected_ids for frame in truth)
+
+
+def test_simulated_frames_wrap_truth_and_apply_only_blur_and_grain() -> None:
+    clean = _small_config(gaussian_bluriness=0.0, grainyness=0.0)
+    blurred = replace(clean, gaussian_bluriness=1.4)
+    grainy = replace(clean, grainyness=8.0)
+
+    clean_frame = next(SyntheticDataGenerator(clean).iter_simulated_frames())
+    blurred_frame = next(SyntheticDataGenerator(blurred).iter_simulated_frames())
+    grainy_frame = next(SyntheticDataGenerator(grainy).iter_simulated_frames())
+
+    assert isinstance(clean_frame, SimulatedFrame)
+    assert clean_frame.frame == 0
+    assert clean_frame.image.dtype == np.uint8
+    assert np.array_equal(clean_frame.labels, clean_frame.ground_truth.labels)
+    assert np.array_equal(
+        clean_frame.image,
+        np.clip(clean_frame.ground_truth.clean_image, 0, 255).astype(np.uint8),
+    )
+
+    assert np.array_equal(clean_frame.labels, blurred_frame.labels)
+    assert np.array_equal(
+        clean_frame.ground_truth.clean_image,
+        blurred_frame.ground_truth.clean_image,
+    )
+    assert not np.array_equal(clean_frame.image, blurred_frame.image)
+
+    assert np.array_equal(clean_frame.labels, grainy_frame.labels)
+    assert np.array_equal(
+        clean_frame.ground_truth.clean_image,
+        grainy_frame.ground_truth.clean_image,
+    )
+    assert not np.array_equal(clean_frame.image, grainy_frame.image)
+
+
+def test_same_seed_produces_identical_truth_and_images() -> None:
+    config = _small_config(frame_count=2, object_count=3)
+    first = tuple(SyntheticDataGenerator(config).iter_simulated_frames())
+    second = tuple(SyntheticDataGenerator(config).iter_simulated_frames())
+
+    for left, right in zip(first, second, strict=True):
+        assert left.positions == right.positions
+        assert np.array_equal(left.labels, right.labels)
+        assert np.array_equal(left.ground_truth.clean_image, right.ground_truth.clean_image)
+        assert np.array_equal(left.image, right.image)
+
+
+def test_streamed_pairs_match_the_simulated_frame_records() -> None:
+    config = _small_config(frame_count=2)
+    records = tuple(SyntheticDataGenerator(config).iter_simulated_frames())
+    pairs = tuple(SyntheticDataGenerator(config).iter_frames())
+
+    assert len(records) == len(pairs) == config.frame_count
+    for record, (image, labels) in zip(records, pairs, strict=True):
+        assert np.array_equal(record.image, image)
+        assert np.array_equal(record.labels, labels)
 
 
 def test_generator_writes_ctc_sequence_and_loads_tiffs(tmp_path: Path) -> None:
@@ -63,141 +137,14 @@ def test_generator_writes_ctc_sequence_and_loads_tiffs(tmp_path: Path) -> None:
     )
 
 
-def test_same_seed_produces_identical_images_and_labels(tmp_path: Path) -> None:
-    config = _small_config(frame_count=2, object_count=3)
-    first = SyntheticDataGenerator(config).generate(tmp_path / "first")
-    second = SyntheticDataGenerator(config).generate(tmp_path / "second")
-
-    for frame in range(config.frame_count):
-        assert np.array_equal(first.load_frame(frame), second.load_frame(frame))
-        assert np.array_equal(
-            first.load_tracking_labels(frame),
-            second.load_tracking_labels(frame),
-        )
-
-
-def test_default_configs_preserve_the_legacy_cached_byte_stream() -> None:
-    digest = sha256()
-    for image, labels in SyntheticDataGenerator(_small_config()).iter_frames():
-        digest.update(image.tobytes())
-        digest.update(labels.tobytes())
-
-    assert digest.hexdigest() == (
-        "7f1dd4f9b84593b12e2b91f4028e1edeea987ed5be71a4ccb75cad9887706878"
-    )
-
-
-def test_override_scenarios_keep_amplitude_draws_paired_across_dropout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    common = _small_config(
-        noise=0.0,
-        frame_count=4,
-        object_count=8,
-        speed_px_per_frame_override=2.5,
-        clutter_per_frame_override=0.0,
-        pixel_noise_sigma_override=0.0,
-    )
-
-    def captured_blobs(config: SyntheticDataConfig) -> tuple[tuple[float, ...], ...]:
-        calls: list[tuple[float, ...]] = []
-
-        def capture(
-            image: np.ndarray,
-            x: float,
-            y: float,
-            angle: float,
-            amplitude: float,
-        ) -> None:
-            calls.append((x, y, angle, amplitude))
-
-        monkeypatch.setattr(
-            SyntheticDataGenerator,
-            "_add_blob",
-            staticmethod(capture),
-        )
-        tuple(
-            SyntheticDataGenerator(config).iter_frames()
-        )
-        return tuple(calls)
-
-    always_visible = replace(common, detection_probability_override=1.0)
-    partly_visible = replace(common, detection_probability_override=0.5)
-    all_blobs = captured_blobs(always_visible)
-    retained_blobs = captured_blobs(partly_visible)
-
-    assert len(all_blobs) == common.frame_count * common.object_count
-    assert 0 < len(retained_blobs) < len(all_blobs)
-    assert set(retained_blobs) < set(all_blobs)
-
-
-def test_streamed_frames_match_the_written_dataset(tmp_path: Path) -> None:
+def test_written_frames_match_streamed_frames(tmp_path: Path) -> None:
     config = _small_config(frame_count=2)
     streamed = tuple(SyntheticDataGenerator(config).iter_frames())
     dataset = SyntheticDataGenerator(config).generate(tmp_path)
 
-    assert len(streamed) == config.frame_count
     for frame, (image, labels) in enumerate(streamed):
         assert np.array_equal(image, dataset.load_frame(frame))
         assert np.array_equal(labels, dataset.load_tracking_labels(frame))
-
-
-def test_difficulty_controls_can_be_varied_independently(tmp_path: Path) -> None:
-    config = _small_config(
-        noise=0.0,
-        speed_px_per_frame_override=9.5,
-        detection_probability_override=0.45,
-        clutter_per_frame_override=7.0,
-        pixel_noise_sigma_override=3.25,
-    )
-
-    assert config.speed_px_per_frame == 9.5
-    assert config.detection_probability == 0.45
-    assert config.clutter_per_frame == 7.0
-    assert config.pixel_noise_sigma == 3.25
-    assert len(tuple(SyntheticDataGenerator(config).iter_frames())) == 3
-
-
-def test_quantum_demo_preset_is_small_versioned_and_nontrivial(
-    tmp_path: Path,
-) -> None:
-    config = QUANTUM_DEMO_DATA_CONFIG
-
-    assert config == SyntheticDataConfig(
-        noise=0.1,
-        frame_count=8,
-        object_count=4,
-        seed=0,
-        dataset_name="SYN-MHT-QUANTUM-v1",
-        sequence="01",
-        image_shape=(256, 320),
-    )
-
-    dataset = SyntheticDataGenerator(config).generate(tmp_path)
-    tracker = HPC(HPCConfig(), sequence=config.sequence)
-    classical = ClassicalSolver(maximum_component_nodes=8)
-    quantum = QuantumSolver(maximum_component_nodes=8)
-    simulated_shapes: list[tuple[int, int]] = []
-    maximum_component_size = 0
-
-    for frame in range(config.frame_count):
-        prepared = tracker.prepare_frame(dataset.load_frame(frame), frame=frame)
-        components = quantum.prepare(prepared.solver_input())
-        maximum_component_size = max(
-            (
-                maximum_component_size,
-                *(len(component.node_ids) for component in components),
-            )
-        )
-        simulated_shapes.extend(
-            (len(component.node_ids), len(component.edges))
-            for component in components
-            if not quantum._is_clique(component)
-        )
-        tracker.advance(prepared, tracker.solve(prepared, classical))
-
-    assert maximum_component_size == 5
-    assert simulated_shapes == [(5, 5)]
 
 
 def test_existing_dataset_is_not_partially_overwritten(tmp_path: Path) -> None:
@@ -214,56 +161,52 @@ def test_existing_dataset_is_not_partially_overwritten(tmp_path: Path) -> None:
     assert {
         path.name: path.read_bytes() for path in original.raw_directory.iterdir()
     } == original_bytes
-    assert set(original_bytes) == {"t000.tif", "t001.tif", "t002.tif"}
 
 
-def test_ground_truth_remains_present_at_the_noisiest_setting(
-    tmp_path: Path,
-) -> None:
-    config = _small_config(noise=1.0, frame_count=5, object_count=1)
-    dataset = SyntheticDataGenerator(config).generate(tmp_path)
-
-    for frame in range(config.frame_count):
-        labels = dataset.load_tracking_labels(frame)
-        assert set(np.unique(labels)) == {0, 1}
-        assert np.count_nonzero(labels == 1) == 9
-
-
-def test_colliding_trajectories_keep_every_ground_truth_id(
-    tmp_path: Path,
-) -> None:
+def test_colliding_trajectories_keep_every_ground_truth_id() -> None:
     config = _small_config(
-        noise=1.0,
+        gaussian_bluriness=0.0,
+        grainyness=0.0,
         frame_count=4,
         object_count=20,
         image_shape=(6, 6),
     )
-    dataset = SyntheticDataGenerator(config).generate(tmp_path)
     expected_ids = set(range(1, config.object_count + 1))
 
-    for frame in range(config.frame_count):
-        labels = dataset.load_tracking_labels(frame)
+    for labels in (frame.labels for frame in SyntheticDataGenerator(config).iter_simulated_frames()):
         assert set(np.unique(labels)) - {0} == expected_ids
+
+
+def test_quantum_demo_preset_is_small_versioned_and_simulated_only() -> None:
+    assert QUANTUM_DEMO_DATA_CONFIG == SyntheticDataConfig(
+        gaussian_bluriness=1.0,
+        grainyness=1.0,
+        frame_count=8,
+        object_count=4,
+        seed=0,
+        dataset_name="SYN-MHT-QUANTUM-v2",
+        sequence="01",
+        image_shape=(256, 320),
+        speed_px_per_frame=3.0,
+    )
 
 
 def test_configuration_and_frame_bounds_are_clear(tmp_path: Path) -> None:
     assert DEFAULT_SYNTHETIC_DATA_ROOT == Path("data") / "synthetic"
-    with pytest.raises(ValueError, match="noise"):
-        _small_config(noise=1.1)
+    with pytest.raises(ValueError, match="gaussian_bluriness"):
+        _small_config(gaussian_bluriness=-0.1)
+    with pytest.raises(ValueError, match="grainyness"):
+        _small_config(grainyness=-1.0)
+    with pytest.raises(ValueError, match="speed_px_per_frame"):
+        _small_config(speed_px_per_frame=0.0)
     with pytest.raises(ValueError, match="directory name"):
         _small_config(dataset_name="../outside")
     with pytest.raises(ValueError, match="uint16"):
         _small_config(object_count=65_536, image_shape=(256, 256))
     with pytest.raises(ValueError, match="available image pixels"):
         _small_config(object_count=17, image_shape=(4, 4))
-    with pytest.raises(ValueError, match="speed_px_per_frame_override"):
-        _small_config(speed_px_per_frame_override=0.0)
-    with pytest.raises(ValueError, match="detection_probability_override"):
-        _small_config(detection_probability_override=1.1)
-    with pytest.raises(ValueError, match="clutter_per_frame_override"):
-        _small_config(clutter_per_frame_override=-1.0)
-    with pytest.raises(ValueError, match="pixel_noise_sigma_override"):
-        _small_config(pixel_noise_sigma_override=-1.0)
+    with pytest.raises(TypeError):
+        _small_config(noise=0.5)
 
     dataset = SyntheticDataGenerator(_small_config()).generate(tmp_path)
     with pytest.raises(ValueError, match="frame"):

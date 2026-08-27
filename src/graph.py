@@ -4,21 +4,19 @@ The tracking front end produces association hypotheses.  Each hypothesis is a
 vertex whose weight is calculated before a solver is selected.  Two vertices
 conflict when they claim the same existing track or the same observation.  This
 module turns those records into a canonical representation, splits the graph
-into connected components, provides stable plotting coordinates, and saves a
-diagnostic figure. It deliberately contains no solver or neutral-atom logic;
-solvers decide internally whether and how to use its component decomposition.
+into connected components, and provides stable logical coordinates. It
+deliberately contains no solver, figure-writing, or neutral-atom logic; solvers
+decide internally whether and how to use its component decomposition.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 import itertools
 from math import ceil, cos, isfinite, pi, sin, sqrt
-from pathlib import Path
 from typing import Protocol
 
-import matplotlib.pyplot as plt
 
 @dataclass(frozen=True, slots=True)
 class GraphNode:
@@ -253,99 +251,3 @@ def logical_layout(graph: ConflictGraph) -> dict[int, tuple[float, float]]:
                 float(center_y + radius * sin(angle)),
             )
     return positions
-
-
-def save_graph_visualization(
-    graph: ConflictGraph,
-    output: str | Path,
-    *,
-    selected_node_ids: Sequence[int] = (),
-    title: str = "Weighted association-conflict graph",
-    dpi: int = 150,
-) -> Path:
-    """Save a readable logical view of a weighted conflict graph.
-
-    Edges mean mutual exclusion.  Node labels show the stable hypothesis ID and
-    its Bayesian weight.  Selected nodes, when supplied, receive a dark outline.
-    """
-
-    selected = tuple(selected_node_ids)
-    selected = tuple(int(node_id) for node_id in selected)
-    if len(selected) != len(set(selected)):
-        raise ValueError("selected node IDs must be unique")
-    unknown = set(selected) - set(graph.node_ids)
-    if unknown:
-        raise KeyError(f"unknown selected node IDs: {sorted(unknown)}")
-    if dpi < 1:
-        raise ValueError("dpi must be a positive integer")
-
-    path = Path(output)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    positions = logical_layout(graph)
-    selected_set = set(selected)
-    cluster_by_node = {
-        node_id: cluster.cluster_id
-        for cluster in cluster_graph(graph)
-        for node_id in cluster.node_ids
-    }
-
-    figure, axis = plt.subplots(figsize=(8.0, 5.5))
-    try:
-        if not graph.nodes:
-            axis.text(
-                0.5,
-                0.5,
-                "No association hypotheses",
-                ha="center",
-                va="center",
-                transform=axis.transAxes,
-                color="#666666",
-            )
-        else:
-            for left, right in graph.edges:
-                x_values = (positions[left][0], positions[right][0])
-                y_values = (positions[left][1], positions[right][1])
-                axis.plot(x_values, y_values, color="#9A9A9A", linewidth=1.3, zorder=1)
-
-            palette = plt.get_cmap("tab10")
-            for node in graph.nodes:
-                x_value, y_value = positions[node.node_id]
-                is_selected = node.node_id in selected_set
-                axis.scatter(
-                    [x_value],
-                    [y_value],
-                    s=620,
-                    color=palette(cluster_by_node[node.node_id] % 10),
-                    edgecolor="#111111" if is_selected else "white",
-                    linewidth=3.0 if is_selected else 1.5,
-                    zorder=2,
-                )
-                axis.text(
-                    x_value,
-                    y_value,
-                    f"{node.node_id}\nw={node.weight:.2f}",
-                    ha="center",
-                    va="center",
-                    fontsize=8,
-                    color="white",
-                    zorder=3,
-                )
-
-        axis.set_title(title)
-        axis.text(
-            0.5,
-            -0.04,
-            "edge = hypotheses share a track or observation",
-            ha="center",
-            va="top",
-            transform=axis.transAxes,
-            fontsize=8,
-            color="#666666",
-        )
-        axis.set_aspect("equal", adjustable="datalim")
-        axis.axis("off")
-        figure.tight_layout()
-        figure.savefig(path, dpi=int(dpi), bbox_inches="tight")
-    finally:
-        plt.close(figure)
-    return path

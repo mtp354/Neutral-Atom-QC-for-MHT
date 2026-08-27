@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 from math import fsum, isfinite
-from time import perf_counter
 from types import MappingProxyType
 from typing import Any, Mapping, final
 
@@ -181,7 +180,6 @@ class SolverResult:
     objective: float
     feasible: bool
     status: str
-    runtime_seconds: float
     diagnostics: Mapping[str, object]
     schema_version: str = SCHEMA_VERSION
 
@@ -198,13 +196,9 @@ class SolverResult:
             _normalized_ids(self.selected_ids, "selected_ids"),
         )
         objective = float(self.objective)
-        runtime = float(self.runtime_seconds)
         if not isfinite(objective):
             raise ValueError("objective must be finite")
-        if not isfinite(runtime) or runtime < 0.0:
-            raise ValueError("runtime_seconds must be finite and non-negative")
         object.__setattr__(self, "objective", objective)
-        object.__setattr__(self, "runtime_seconds", runtime)
         object.__setattr__(
             self,
             "diagnostics",
@@ -229,7 +223,6 @@ class SolverResult:
             "objective": self.objective,
             "feasible": self.feasible,
             "status": self.status,
-            "runtime_seconds": self.runtime_seconds,
             "diagnostics": _thaw_json(self.diagnostics),
         }
 
@@ -259,49 +252,6 @@ def validate_result(solver_input: SolverInput, result: SolverResult) -> None:
         raise ValueError("an unsuccessful result cannot select graph nodes")
 
 
-@dataclass(frozen=True, slots=True)
-class SolverComparison:
-    """Read-only results from multiple solvers given the same frame input."""
-
-    input_fingerprint: str
-    results: tuple[SolverResult, ...]
-
-    def __post_init__(self) -> None:
-        results = tuple(self.results)
-        if len(results) < 2:
-            raise ValueError("a solver comparison requires at least two results")
-        names = tuple(result.solver_name for result in results)
-        if len(names) != len(set(names)):
-            raise ValueError("comparison solver names must be unique")
-        if any(
-            result.input_fingerprint != self.input_fingerprint
-            for result in results
-        ):
-            raise ValueError("comparison results must use the same input fingerprint")
-        object.__setattr__(self, "results", results)
-
-    @classmethod
-    def from_results(cls, results: Iterable[SolverResult]) -> SolverComparison:
-        """Construct a comparison and derive its shared input fingerprint."""
-
-        normalized = tuple(results)
-        fingerprint = normalized[0].input_fingerprint if normalized else ""
-        return cls(input_fingerprint=fingerprint, results=normalized)
-
-    def result(self, solver_name: str) -> SolverResult:
-        matches = tuple(
-            result for result in self.results if result.solver_name == solver_name
-        )
-        if len(matches) != 1:
-            raise KeyError(solver_name)
-        return matches[0]
-
-    def rows(self) -> tuple[dict[str, object], ...]:
-        """Return notebook-friendly rows with identical common columns."""
-
-        return tuple(result.to_dict() for result in self.results)
-
-
 class Solver(ABC):
     """Template shared by every maximum-weight-independent-set solver."""
 
@@ -319,9 +269,7 @@ class Solver(ABC):
         """Solve one complete frame graph and construct the validated result."""
 
         solver_name = _non_empty_string(self.solver_name, "solver_name")
-        started = perf_counter()
         selection = self._select(solver_input)
-        runtime_seconds = perf_counter() - started
 
         selected = set(selection.selected_ids)
         feasible = not any(
@@ -338,7 +286,6 @@ class Solver(ABC):
             objective=objective,
             feasible=feasible,
             status=selection.status,
-            runtime_seconds=runtime_seconds,
             diagnostics=selection.diagnostics,
         )
         validate_result(solver_input, result)
@@ -416,7 +363,6 @@ __all__ = [
     "SUCCESS_STATUSES",
     "ComponentSolver",
     "Solver",
-    "SolverComparison",
     "SolverInput",
     "SolverResult",
     "SolverSelection",

@@ -9,7 +9,6 @@ description = "Interpretable cell detection and solver-independent hypothesis pr
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "matplotlib>=3.8",
     "numpy>=2.0",
     "Pillow>=11.0",
     "scipy>=1.14",
@@ -24,7 +23,6 @@ test = ["ipykernel>=6", "nbclient>=0.10", "nbformat>=5.10", "pytest>=8.0"]
 package-dir = {"" = "src"}
 py-modules = [
     "_version",
-    "cell_data",
     "classical_solver",
     "detection",
     "filtering",
@@ -35,7 +33,6 @@ py-modules = [
     "models",
     "neutral_atom",
     "neutral_atom_mht",
-    "overnight_benchmark",
     "solver",
     "synthetic_data",
 ]

@@ -97,7 +97,7 @@ def test_default_solver_reports_the_missing_optional_dependency(
     assert 'install ".[quantum]"' in result.diagnostics["message"]
 
 
-def test_qutip_cache_is_redirected_below_data(
+def test_qutip_cache_is_redirected_below_local_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -120,7 +120,7 @@ def test_qutip_cache_is_redirected_below_data(
     runner = PulserQutipRunner()
     _, backend_factory, _ = runner._runtime()
 
-    expected_root = (tmp_path / "data" / ".cache" / "qutip").resolve()
+    expected_root = (tmp_path / ".cache" / "qutip").resolve()
     expected_coefficients = expected_root / fallback.name
     assert backend_factory is simulation.QutipBackendV2  # type: ignore[attr-defined]
     assert Path(settings.tmproot) == expected_root

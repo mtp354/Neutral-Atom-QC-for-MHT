@@ -1,24 +1,19 @@
-"""Check canonical graph encoding, clustering, validation, and plotting."""
+"""Check canonical graph encoding, clustering, validation, and layout."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
 
-import matplotlib
 import pytest
-from PIL import Image
 
-matplotlib.use("Agg")
-
-from graph import (  # noqa: E402
+from graph import (
     ConflictGraph,
     GraphCluster,
     GraphNode,
     cluster_graph,
     encode_conflict_graph,
     logical_layout,
-    save_graph_visualization,
 )
 
 
@@ -185,34 +180,3 @@ def test_logical_layout_is_deterministic_finite_and_complete() -> None:
     assert all(len(position) == 2 for position in first.values())
     assert all(math.isfinite(coordinate) for position in first.values() for coordinate in position)
     assert logical_layout(ConflictGraph(())) == {}
-
-
-def test_save_graph_visualization_writes_a_nonempty_png(tmp_path) -> None:
-    graph = ConflictGraph(
-        nodes=(_node(0, weight=1.25), _node(1, weight=2.5), _node(2, weight=-0.5)),
-        edges=((0, 1),),
-    )
-    output = tmp_path / "nested" / "graph.png"
-
-    returned = save_graph_visualization(
-        graph,
-        output,
-        selected_node_ids=(1,),
-        title="Test graph",
-        dpi=80,
-    )
-
-    assert returned == output
-    assert output.stat().st_size > 0
-    with Image.open(output) as image:
-        assert image.format == "PNG"
-        assert image.width > 100
-        assert image.height > 100
-
-
-def test_visualization_rejects_unknown_or_duplicate_selections(tmp_path) -> None:
-    graph = ConflictGraph((_node(0),))
-    with pytest.raises(KeyError, match="unknown selected"):
-        save_graph_visualization(graph, tmp_path / "unknown.png", selected_node_ids=(1,))
-    with pytest.raises(ValueError, match="unique"):
-        save_graph_visualization(graph, tmp_path / "duplicate.png", selected_node_ids=(0, 0))

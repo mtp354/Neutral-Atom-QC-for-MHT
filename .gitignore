@@ -1,11 +1,14 @@
-# Source and generated datasets stay local.
+# Simulated datasets stay local.
 /data/*
 
 # Ad-hoc pipeline runs.
 /outputs/
 
+# Local caches.
+/.cache/
+
 # QuTiP falls back to the working directory when its normal user cache is not
-# writable. The solver redirects it to data/.cache/, but ignore the fallback.
+# writable. The solver redirects it to .cache/qutip/, but ignore the fallback.
 /qutip_coeffs_*/
 
 # Python

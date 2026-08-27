@@ -14,13 +14,12 @@ global hypotheses.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 import json
 from math import isfinite
 from operator import index
-from pathlib import Path
 
 import numpy as np
 
@@ -36,7 +35,6 @@ from graph import (
     ConflictGraph,
     encode_conflict_graph,
     logical_layout,
-    save_graph_visualization,
 )
 from likelihood import (
     BayesianConfig,
@@ -53,7 +51,6 @@ from models import (
 )
 from solver import (
     Solver,
-    SolverComparison,
     SolverInput,
     SolverResult,
     validate_result,
@@ -377,25 +374,6 @@ class HPC:
 
         return logical_layout(graph)
 
-    def visualize_graph(
-        self,
-        graph: ConflictGraph,
-        output: str | Path,
-        *,
-        selected_node_ids: Sequence[int] = (),
-        title: str = "Weighted association-conflict graph",
-        dpi: int = 150,
-    ) -> Path:
-        """Save the same logical graph, optionally highlighting solver choices."""
-
-        return save_graph_visualization(
-            graph,
-            output,
-            selected_node_ids=selected_node_ids,
-            title=title,
-            dpi=dpi,
-        )
-
     def prepare_observations(
         self,
         observations: Iterable[Observation],
@@ -455,17 +433,6 @@ class HPC:
         """Hand the complete frame graph to one solver without changing state."""
 
         return solver.solve(prepared.solver_input())
-
-    def compare(
-        self,
-        prepared: PreparedFrame,
-        solvers: Iterable[Solver],
-    ) -> SolverComparison:
-        """Run distinct solvers on byte-identical inputs without updating tracks."""
-
-        return SolverComparison.from_results(
-            self.solve(prepared, solver) for solver in solvers
-        )
 
     def bayesian_update(
         self,

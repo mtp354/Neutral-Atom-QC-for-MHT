@@ -1,9 +1,12 @@
-"""Keep the root notebook concise, reproducible, and internally consistent."""
+"""Keep the root notebook concise, simulation-only, and executable."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import nbformat
+from nbclient import NotebookClient
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,142 +21,66 @@ def _source(cell: dict[str, object]) -> str:
     return "".join(cell["source"])
 
 
-def _cells_by_id() -> dict[str, str]:
-    return {cell["id"]: _source(cell) for cell in _payload()["cells"]}
-
-
-def test_notebook_has_clean_reduced_cell_order() -> None:
+def test_notebook_has_short_clean_cell_order() -> None:
     payload = _payload()
     cells = payload["cells"]
 
     assert payload["nbformat"] == 4
     assert [cell["id"] for cell in cells] == [
-        "intro",
-        "imports",
-        "overnight_intro",
-        "overnight_config",
-        "overnight_run",
-        "publication_figures",
-        "figure_setup",
-        "fig1_detections",
-        "figure_analysis",
-        "fig2_conflict_graph",
-        "fig3_neutral_atoms",
-        "fig4_performance",
-        "fig5_eligibility",
-        "fig6_detection",
-        "fig7_runtime",
-        "fig8_hardware_runtime",
+        "overview",
+        "setup",
+        "simulate",
+        "track",
+        "inspect",
     ]
-    assert [
-        index for index, cell in enumerate(cells)
-        if cell["cell_type"] == "markdown"
-    ] == [0, 2, 5]
+    assert cells[0]["cell_type"] == "markdown"
     code_cells = [cell for cell in cells if cell["cell_type"] == "code"]
+    assert len(code_cells) == 4
     assert all(cell.get("execution_count") is None for cell in code_cells)
     assert all(cell.get("outputs") == [] for cell in code_cells)
     for cell in code_cells:
         compile(_source(cell), f"user_notebook:{cell['id']}", "exec")
 
 
-def test_notebook_uses_one_combined_noise_parameter_and_reuses_classical_data() -> None:
-    cells = _cells_by_id()
-    imports = cells["imports"]
-    campaign = cells["overnight_config"]
+def test_notebook_contains_only_simulation_tracking_workflow() -> None:
+    source = "\n".join(_source(cell) for cell in _payload()["cells"])
 
-    assert imports.index("sys.path.insert") < imports.index(
-        "from neutral_atom_mht"
+    required = (
+        "SyntheticDataConfig",
+        "SyntheticDataGenerator",
+        "iter_simulated_frames",
+        "gaussian_bluriness",
+        "grainyness",
+        "HPC",
+        "ClassicalSolver",
+        "run_sequence",
     )
-    assert "SyntheticDataset" not in imports
-    assert "DEFAULT_SYNTHETIC_DATA_ROOT" not in imports
-    assert 'BENCHMARK_AXIS = "combined"' in campaign
-    assert 'axes=("baseline", BENCHMARK_AXIS)' in campaign
-    assert "BENCHMARK_SEVERITIES = (0.2, 0.4, 0.6, 0.8, 1.0)" in campaign
-    assert "BENCHMARK_OBJECT_COUNTS = (4, 12, 30, 55)" in campaign
-    assert "BENCHMARK_SEEDS = tuple(range(5))" in campaign
-    assert "BENCHMARK_FRAME_COUNT = 40" in campaign
-    assert "QUANTUM_QUOTA_PER_STRATUM = 3" in campaign
-    assert "BENCHMARK_FORWARD_WORK_MINUTES = 25.0" in campaign
-    assert "exact_checkpoint_source=classical_checkpoint" in campaign
-    assert '"schema-2.1"' in campaign
-    assert '"combined_quick"' in campaign
-    assert "exact_maximum_component_nodes=128" in campaign
-    assert "quantum_max_nonclique_component_nodes=8" in campaign
-    assert "store_detailed_records=False" in campaign
-    assert "resume=True" in campaign
-    assert "BENCHMARK_AXES" not in campaign
-    assert "BENCHMARK_PROFILE" not in campaign
-    assert "run_overnight_benchmark(" in cells["overnight_run"]
-
-
-def test_notebook_figures_are_renumbered_and_use_combined_noise() -> None:
-    cells = _cells_by_id()
-
-    assert "fig1_workflow" not in cells
-    assert '"fig1_detection_overlays.png"' in cells["fig1_detections"]
-    assert "SyntheticDataGenerator(QUANTUM_DEMO_DATA_CONFIG)" in cells[
-        "fig1_detections"
-    ]
-    assert "Real sequence not installed" in cells["fig1_detections"]
-    assert "synthetic_truth" in cells["fig1_detections"]
-
-    assert "example_quantum_solver.execute(" in cells["figure_analysis"]
-    assert "example_exact_solver.solve(prepared_frame.solver_input())" in cells[
-        "figure_analysis"
-    ]
-    assert "example_reference.advance(prepared_frame, exact_result)" in cells[
-        "figure_analysis"
-    ]
-    assert '"fig2_conflict_graph.png"' in cells["fig2_conflict_graph"]
-    assert "logical_layout(example_graph)" in cells["fig2_conflict_graph"]
-    assert '"fig3_neutral_atom_embedding.png"' in cells["fig3_neutral_atoms"]
-    assert "example_run.coordinates" in cells["fig3_neutral_atoms"]
-    assert "physical_edges != intended_edges" in cells["fig3_neutral_atoms"]
-
-    assert '"fig4_quantum_reliability.png"' in cells["fig4_performance"]
-    assert "combined-noise severity" in cells["fig4_performance"]
-    assert '"selection_agrees"' in cells["fig4_performance"]
-    assert 'row["graph_nodes"]' in cells["fig4_performance"]
-    assert "total conflict-graph nodes" in cells["fig4_performance"]
-    assert "maximum_nonclique_component_nodes" not in cells["fig4_performance"]
-
-    assert '"fig5_quantum_size_outcomes.png"' in cells["fig5_eligibility"]
-    assert "maximum_nonclique_component_nodes" in cells["fig5_eligibility"]
-    assert 'else BENCHMARK_AXIS' in cells["fig5_eligibility"]
-    assert all(
-        label in cells["fig5_eligibility"]
-        for label in ("no_work", "supported", "oversized")
+    forbidden = (
+        "cell_data",
+        "load_tiff",
+        "run_overnight_benchmark",
+        "OvernightBenchmarkConfig",
+        "benchmark.sqlite3",
+        "outputs/",
+        "matplotlib",
+        "savefig",
+        "NeutralAtomVisualizer",
+        "runtime_seconds",
     )
 
-    assert '"fig6_detection_and_tracking_quality.png"' in cells["fig6_detection"]
-    assert "condition_medians" in cells["fig6_detection"]
-    assert "combined-noise severity" in cells["fig6_detection"]
-    assert "BENCHMARK_AXES" not in cells["fig6_detection"]
+    assert all(token in source for token in required)
+    assert all(token not in source for token in forbidden)
 
-    assert '"fig7_runtime_diagnostics.png"' in cells["fig7_runtime"]
-    assert '"states_evaluated"' in cells["fig7_runtime"]
-    assert '"quantum_runtime_seconds"' in cells["fig7_runtime"]
-    assert 'row["graph_nodes"]' in cells["fig7_runtime"]
 
-    assert (
-        "sequence.get_duration(include_fall_time=True)"
-        in cells["fig8_hardware_runtime"]
+def test_notebook_executes_from_a_clean_kernel() -> None:
+    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    client = NotebookClient(
+        notebook,
+        timeout=90,
+        kernel_name="python3",
+        resources={"metadata": {"path": str(ROOT)}},
     )
-    assert '"sample_count"' in cells["fig8_hardware_runtime"]
-    assert '"qpu_sampled_seconds"' in cells["fig8_hardware_runtime"]
-    assert 'row["graph_nodes"]' in cells["fig8_hardware_runtime"]
-    assert "reference_cpu_count" in cells["fig8_hardware_runtime"]
-    assert '"fig8_hardware_runtime_comparison.png"' in cells[
-        "fig8_hardware_runtime"
-    ]
-    assert "atom loading, reset, readout" in cells["fig8_hardware_runtime"]
 
+    executed = client.execute()
 
-def test_notebook_contains_no_obsolete_workflow_or_demo_cells() -> None:
-    cells = _cells_by_id()
-
-    assert not {"data", "config", "run", "run_many", "fig1_workflow"} & cells.keys()
-    all_source = "\n".join(cells.values())
-    assert "fig1_workflow.png" not in all_source
-    assert "BENCHMARK_PROFILE" not in all_source
-    assert "BENCHMARK_AXES" not in all_source
+    assert executed["cells"][-1]["outputs"]

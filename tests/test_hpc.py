@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -62,14 +61,6 @@ def cell_image(*, centre_x: float = 34.0, centre_y: float = 30.0) -> np.ndarray:
     return np.clip(image, 0, 255).astype(np.uint8)
 
 
-class AlternateClassicalSolver(ClassicalSolver):
-    """Use the exact algorithm under another name for a fair input comparison."""
-
-    @property
-    def solver_name(self) -> str:
-        return "classical_exact_copy"
-
-
 def test_public_class_name_and_lowercase_requested_alias_are_both_available() -> None:
     assert hpc is HPC
 
@@ -90,9 +81,7 @@ def test_observe_keeps_detection_diagnostics_beside_tracking_observations() -> N
     assert observation.covariance == ((1.5, 0.0), (0.0, 1.5))
 
 
-def test_preparation_calls_the_same_public_stages_a_user_can_inspect(
-    tmp_path: Path,
-) -> None:
+def test_preparation_calls_the_same_public_stages_a_user_can_inspect() -> None:
     tracker = configured_hpc()
     solver = ClassicalSolver()
     tracker.step_observations(
@@ -133,8 +122,6 @@ def test_preparation_calls_the_same_public_stages_a_user_can_inspect(
         replace(prepared, graph=altered_graph)
 
     assert set(tracker.graph_embedding(graph)) == set(graph.node_ids)
-    figure = tracker.visualize_graph(graph, tmp_path / "graph.png")
-    assert figure.is_file() and figure.stat().st_size > 0
 
 
 def test_prepare_frame_retains_the_interpretable_image_boundary() -> None:
@@ -181,38 +168,6 @@ def test_solver_result_is_read_only_until_bayesian_update_and_advance() -> None:
 
     with pytest.raises(ValueError, match="stale"):
         tracker.advance(prepared, solver_result)
-
-
-def test_compare_uses_identical_inputs_and_never_selects_state_for_the_user() -> None:
-    tracker = configured_hpc()
-    solver = ClassicalSolver()
-    tracker.step_observations(
-        (Observation(frame=0, observation_id=1, x=0.0, y=0.0),),
-        solver,
-        frame=0,
-    )
-    prepared = tracker.prepare_observations(
-        (Observation(frame=1, observation_id=1, x=0.25, y=0.0),),
-        frame=1,
-    )
-    before = tracker.tracks
-
-    comparison = tracker.compare(
-        prepared,
-        (solver, AlternateClassicalSolver()),
-    )
-
-    assert tracker.tracks == before
-    assert comparison.input_fingerprint
-    assert (
-        comparison.result("classical_exact").input_fingerprint
-        == comparison.input_fingerprint
-    )
-    assert (
-        comparison.result("classical_exact_copy").input_fingerprint
-        == comparison.input_fingerprint
-    )
-    assert len(comparison.rows()) == 2
 
 
 def test_configuration_change_invalidates_an_old_prepared_frame() -> None:

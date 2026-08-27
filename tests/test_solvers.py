@@ -20,7 +20,6 @@ from graph import ConflictGraph, GraphNode
 from solver import (
     ComponentSolver,
     Solver,
-    SolverComparison,
     SolverInput,
     SolverResult,
     SolverSelection,
@@ -49,14 +48,6 @@ def worked_problem() -> SolverInput:
         frame=7,
         graph=graph,
     )
-
-
-class SameExactSolver(ClassicalSolver):
-    """Give the exact algorithm a second name for comparison tests."""
-
-    @property
-    def solver_name(self) -> str:
-        return "same_exact_algorithm"
 
 
 class ConflictingSolver(Solver):
@@ -203,7 +194,6 @@ def test_result_diagnostics_are_deeply_immutable_and_export_detached() -> None:
         objective=0.0,
         feasible=True,
         status="completed",
-        runtime_seconds=0.0,
         diagnostics={"nested": {"items": [1, 2]}},
     )
 
@@ -213,29 +203,9 @@ def test_result_diagnostics_are_deeply_immutable_and_export_detached() -> None:
     exported = result.to_dict()
     exported["diagnostics"]["nested"]["items"].append(3)  # type: ignore[index,union-attr]
     assert result.diagnostics["nested"]["items"] == (1, 2)
+    assert "runtime_seconds" not in exported
 
 
 def test_template_rejects_a_concrete_solver_that_selects_conflicting_nodes() -> None:
     with pytest.raises(ValueError, match="independent set"):
         ConflictingSolver().solve(worked_problem())
-
-
-def test_comparison_keeps_one_common_result_schema_for_one_input() -> None:
-    solver_input = worked_problem()
-    classical = ClassicalSolver()
-    duplicate = SameExactSolver()
-
-    comparison = SolverComparison.from_results(
-        (
-            classical.solve(solver_input),
-            duplicate.solve(solver_input),
-        )
-    )
-
-    first = comparison.result("classical_exact")
-    second = comparison.result("same_exact_algorithm")
-    assert comparison.input_fingerprint == solver_input.fingerprint
-    assert first.input_fingerprint == second.input_fingerprint == solver_input.fingerprint
-    assert first.selected_ids == second.selected_ids == (3, 6)
-    assert first.successful and second.successful
-    assert set(comparison.rows()[0]) == set(comparison.rows()[1])
